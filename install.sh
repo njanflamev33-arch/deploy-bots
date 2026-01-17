@@ -1177,5 +1177,3 @@ main() {
 main
 
 exit 0
-EOF
-chmod +x install.sh
