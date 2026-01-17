@@ -59,7 +59,376 @@ print_warning() {
     echo -e "${YELLOW}⚠ ${1}${NC}"
 }
 
-# Check if running as root
+# Check if running in Docker
+if [ -f /.dockerenv ] || grep -q docker /proc/1/cgroup 2>/dev/null; then
+    echo -e "${YELLOW}🐳 Docker environment detected!${NC}\n"
+fi
+
+echo -e "${BLUE}[1/7] Checking LXD installation...${NC}"
+if command -v lxc &> /dev/null; then
+    echo -e "${GREEN}✓ LXD is installed${NC}"
+    lxc version
+else
+    echo -e "${RED}✗ LXD is not installed${NC}"
+    echo -e "   Run: ${CYAN}snap install lxd${NC}"
+fi
+echo
+
+echo -e "${BLUE}[2/7] Checking LXD service...${NC}"
+if systemctl is-active --quiet lxd 2>/dev/null; then
+    echo -e "${GREEN}✓ LXD service is running${NC}"
+elif systemctl is-active --quiet snap.lxd.daemon 2>/dev/null; then
+    echo -e "${GREEN}✓ LXD daemon is running${NC}"
+else
+    echo -e "${YELLOW}⚠ LXD service may not be running${NC}"
+    echo -e "   Try: ${CYAN}systemctl start lxd${NC}"
+    echo -e "   Or: ${CYAN}systemctl start snap.lxd.daemon${NC}"
+fi
+echo
+
+echo -e "${BLUE}[3/7] Testing LXD connectivity...${NC}"
+if lxc list &>/dev/null; then
+    echo -e "${GREEN}✓ LXD is responding${NC}"
+    lxc list
+else
+    echo -e "${RED}✗ Cannot connect to LXD${NC}"
+    echo -e "   Try: ${CYAN}lxd init${NC}"
+fi
+echo
+
+echo -e "${BLUE}[4/7] Checking Python installation...${NC}"
+if [ -d "/opt/xeloracloud/venv" ]; then
+    echo -e "${GREEN}✓ Virtual environment exists${NC}"
+else
+    echo -e "${RED}✗ Virtual environment missing${NC}"
+    echo -e "   Run: ${CYAN}cd /opt/xeloracloud && python3 -m venv venv${NC}"
+fi
+echo
+
+echo -e "${BLUE}[5/7] Checking configuration...${NC}"
+if [ -f "/opt/xeloracloud/.env" ]; then
+    echo -e "${GREEN}✓ Configuration file exists${NC}"
+    if grep -q "YOUR_DISCORD_BOT_TOKEN_HERE" /opt/xeloracloud/.env; then
+        echo -e "${RED}✗ Discord token not configured!${NC}"
+        echo -e "   Edit: ${CYAN}nano /opt/xeloracloud/.env${NC}"
+    else
+        echo -e "${GREEN}✓ Discord token configured${NC}"
+    fi
+else
+    echo -e "${RED}✗ Configuration file missing${NC}"
+fi
+echo
+
+echo -e "${BLUE}[6/7] Checking bot file...${NC}"
+if [ -f "/opt/xeloracloud/bot.py" ]; then
+    echo -e "${GREEN}✓ Bot file exists${NC}"
+else
+    echo -e "${RED}✗ Bot file missing${NC}"
+    echo -e "   Copy with: ${CYAN}cp bot.py /opt/xeloracloud/${NC}"
+fi
+echo
+
+echo -e "${BLUE}[7/7] Checking XeloraCloud service...${NC}"
+if systemctl is-active --quiet xeloracloud 2>/dev/null; then
+    echo -e "${GREEN}✓ XeloraCloud service is running${NC}"
+    systemctl status xeloracloud --no-pager | head -15
+else
+    echo -e "${YELLOW}⚠ XeloraCloud service is not running${NC}"
+    echo -e "   Start with: ${CYAN}systemctl start xeloracloud${NC}"
+    echo -e "   Check logs: ${CYAN}journalctl -u xeloracloud -n 50${NC}"
+fi
+echo
+
+echo -e "${CYAN}╔══════════════════════════════════════════════════════╗${NC}"
+echo -e "${CYAN}║              Quick Fix Commands                      ║${NC}"
+echo -e "${CYAN}╚══════════════════════════════════════════════════════╝${NC}"
+echo -e "${YELLOW}Restart LXD:${NC} ${CYAN}systemctl restart lxd${NC}"
+echo -e "${YELLOW}Restart Bot:${NC} ${CYAN}systemctl restart xeloracloud${NC}"
+echo -e "${YELLOW}View Logs:${NC} ${CYAN}journalctl -u xeloracloud -f${NC}"
+echo -e "${YELLOW}Test LXD:${NC} ${CYAN}lxc launch ubuntu:22.04 test${NC}"
+echo
+TROUBLEOF
+    chmod +x troubleshoot.sh
+    
+    # Docker help document
+    cat > DOCKER_HELP.md << 'DOCKEREOF'
+# 🐳 Running XeloraCloud in Docker
+
+## ⚠️ Important Docker Requirements
+
+LXD requires specific Docker configurations to run properly:
+
+### Required Docker Run Flags:
+```bash
+docker run -it \
+  --privileged \
+  --security-opt apparmor=unconfined \
+  --cgroup-parent=docker.slice \
+  -v /lib/modules:/lib/modules:ro \
+  -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+  ubuntu:22.04 /bin/bash
+```
+
+### Explanation:
+- `--privileged`: Gives container extended privileges
+- `--security-opt apparmor=unconfined`: Disables AppArmor restrictions
+- `--cgroup-parent=docker.slice`: Proper cgroup configuration
+- `-v /lib/modules:/lib/modules:ro`: Kernel modules access
+- `-v /sys/fs/cgroup:/sys/fs/cgroup:rw`: Cgroup filesystem access
+
+## 🔧 Alternative: Docker Compose
+
+```yaml
+version: '3.8'
+services:
+  xeloracloud:
+    image: ubuntu:22.04
+    privileged: true
+    security_opt:
+      - apparmor=unconfined
+    cgroup_parent: docker.slice
+    volumes:
+      - /lib/modules:/lib/modules:ro
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - ./xeloracloud:/opt/xeloracloud
+    command: /bin/bash
+```
+
+## 🛠️ Troubleshooting Docker + LXD
+
+### Problem: "cannot communicate with server"
+**Solution:**
+```bash
+systemctl start lxd
+# or
+systemctl start snap.lxd.daemon
+```
+
+### Problem: LXD won't start
+**Solution:**
+```bash
+# Use dir storage instead of ZFS
+lxd init --auto --storage-backend=dir
+```
+
+### Problem: Permission denied
+**Solution:**
+```bash
+# Ensure running as root in container
+whoami  # should show 'root'
+
+# Add your user to lxd group (if not root)
+usermod -aG lxd $USER
+```
+
+## 📚 Best Practices
+
+1. **Use Ubuntu 22.04** as base image (best LXD support)
+2. **Allocate enough resources** (4GB+ RAM recommended)
+3. **Use dir storage** in Docker (not ZFS)
+4. **Check logs** regularly: `journalctl -u lxd -f`
+
+## 🚀 Quick Start in Docker
+
+```bash
+# 1. Start privileged container
+docker run -it --privileged ubuntu:22.04 bash
+
+# 2. Install dependencies
+apt update && apt install -y wget curl
+
+# 3. Download and run install script
+wget https://your-url/install.sh
+chmod +x install.sh
+./install.sh
+
+# 4. Follow the interactive setup
+# When asked about Docker, say YES
+
+# 5. Start the bot
+cd /opt/xeloracloud
+./start.sh
+```
+
+## 📞 Need Help?
+
+- Run troubleshooter: `./troubleshoot.sh`
+- Check logs: `journalctl -u xeloracloud -f`
+- Test LXD: `lxc list`
+
+## 🔗 Useful Links
+
+- LXD Documentation: https://linuxcontainers.org/lxd/
+- Docker Documentation: https://docs.docker.com/
+- XeloraCloud GitHub: [Your Repository]
+
+---
+*Remember: LXD in Docker is experimental. For production, use a VPS/dedicated server!*
+DOCKEREOF
+    
+    print_success "Helper scripts created"
+}
+
+# Configure firewall
+configure_firewall() {
+    print_step "Configuring firewall..."
+    
+    if command -v ufw &> /dev/null; then
+        ufw allow 22/tcp
+        ufw allow 20000:50000/tcp
+        ufw allow 20000:50000/udp
+        
+        if ! ufw status | grep -q "Status: active"; then
+            print_warning "UFW will be enabled. Make sure SSH (port 22) is allowed!"
+            read -p "Enable UFW firewall? (y/N): " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                ufw --force enable
+                print_success "Firewall configured and enabled"
+            fi
+        else
+            ufw reload
+            print_success "Firewall rules updated"
+        fi
+    else
+        print_info "UFW not installed, skipping firewall configuration"
+    fi
+}
+
+# Optimize system for LXC
+optimize_system() {
+    print_step "Optimizing system for LXC containers..."
+    
+    cat >> /etc/sysctl.conf << SYSCTLEOF
+
+# XeloraCloud optimizations
+fs.inotify.max_user_watches=524288
+fs.inotify.max_user_instances=512
+fs.inotify.max_queued_events=32768
+net.ipv4.ip_forward=1
+net.ipv4.conf.all.forwarding=1
+SYSCTLEOF
+    
+    sysctl -p
+    print_success "System optimized for containers"
+}
+
+# Create requirements.txt
+create_requirements() {
+    cat > requirements.txt << REQEOF
+discord.py>=2.3.0
+aiohttp>=3.9.0
+psutil>=5.9.0
+python-dotenv>=1.0.0
+colorama>=0.4.6
+tabulate>=0.9.0
+REQEOF
+    print_success "Requirements file created"
+}
+
+# Final setup
+final_setup() {
+    print_step "Finalizing installation..."
+    chown -R root:root /opt/xeloracloud
+    chmod -R 755 /opt/xeloracloud
+    print_success "Permissions set"
+}
+
+# Print completion message
+print_completion() {
+    echo -e "\n${CYAN}"
+    cat << "COMPEOF"
+╔═══════════════════════════════════════════════════════════╗
+║                                                           ║
+║          ✅  INSTALLATION COMPLETE!  ✅                   ║
+║                                                           ║
+╚═══════════════════════════════════════════════════════════╝
+COMPEOF
+    echo -e "${NC}"
+    
+    echo -e "${GREEN}🎉 XeloraCloud has been installed successfully!${NC}\n"
+    
+    echo -e "${YELLOW}📋 CONFIGURATION DETAILS:${NC}"
+    echo -e "   ${GREEN}✓${NC} Bot Token: ${CYAN}Configured${NC}"
+    echo -e "   ${GREEN}✓${NC} Admin ID: ${CYAN}Configured${NC}"
+    echo -e "   ${GREEN}✓${NC} Config File: ${CYAN}/opt/xeloracloud/.env${NC}\n"
+    
+    echo -e "${YELLOW}🚀 NEXT STEPS:${NC}"
+    echo -e "   1️⃣  Copy your bot.py file to:"
+    echo -e "      ${CYAN}cp bot.py /opt/xeloracloud/${NC}\n"
+    
+    echo -e "   2️⃣  Enable and start the service:"
+    echo -e "      ${CYAN}systemctl enable xeloracloud${NC}"
+    echo -e "      ${CYAN}systemctl start xeloracloud${NC}\n"
+    
+    echo -e "   3️⃣  Or use the helper scripts:"
+    echo -e "      ${CYAN}cd /opt/xeloracloud${NC}"
+    echo -e "      ${CYAN}./start.sh${NC}\n"
+    
+    echo -e "${YELLOW}🛠️  USEFUL COMMANDS:${NC}"
+    echo -e "   • Start:    ${CYAN}./start.sh${NC}"
+    echo -e "   • Stop:     ${CYAN}./stop.sh${NC}"
+    echo -e "   • Restart:  ${CYAN}./restart.sh${NC}"
+    echo -e "   • Logs:     ${CYAN}./logs.sh${NC}"
+    echo -e "   • Status:   ${CYAN}systemctl status xeloracloud${NC}\n"
+    
+    echo -e "${BLUE}📍 Installation Directory:${NC} ${CYAN}/opt/xeloracloud${NC}"
+    echo -e "${BLUE}📍 Configuration File:${NC} ${CYAN}/opt/xeloracloud/.env${NC}"
+    echo -e "${BLUE}📍 Log File:${NC} ${CYAN}/opt/xeloracloud/xeloracloud.log${NC}\n"
+    
+    if [ -f /.dockerenv ] || grep -q docker /proc/1/cgroup 2>/dev/null; then
+        echo -e "${YELLOW}╔══════════════════════════════════════════════════════╗${NC}"
+        echo -e "${YELLOW}║       🐳 DOCKER ENVIRONMENT DETECTED 🐳              ║${NC}"
+        echo -e "${YELLOW}╚══════════════════════════════════════════════════════╝${NC}"
+        echo
+        print_warning "Running in Docker! Important notes:"
+        echo -e "   ${YELLOW}•${NC} LXD may have limited functionality"
+        echo -e "   ${YELLOW}•${NC} Ensure Docker is running with --privileged"
+        echo -e "   ${YELLOW}•${NC} Test LXD with: ${CYAN}lxc list${NC}"
+        echo -e "   ${YELLOW}•${NC} If issues occur, check: ${CYAN}./troubleshoot.sh${NC}"
+        echo
+    fi
+    
+    echo -e "${GREEN}🌟 Get your Discord Bot Token:${NC}"
+    echo -e "   ${CYAN}https://discord.com/developers/applications${NC}\n"
+    
+    echo -e "${GREEN}🌟 Get your Discord User ID:${NC}"
+    echo -e "   ${CYAN}Enable Developer Mode → Right-click profile → Copy ID${NC}\n"
+    
+    echo -e "${YELLOW}⚠️  TROUBLESHOOTING:${NC}"
+    echo -e "   If LXD doesn't work: ${CYAN}./troubleshoot.sh${NC}"
+    echo -e "   For Docker issues: ${CYAN}cat /opt/xeloracloud/DOCKER_HELP.md${NC}\n"
+    
+    echo -e "${PURPLE}💜 Thank you for choosing XeloraCloud!${NC}"
+    echo -e "${PURPLE}☁️  Happy hosting! ☁️${NC}\n"
+}
+
+# Main function
+main() {
+    clear
+    print_banner
+    print_info "Starting XeloraCloud installation...\n"
+    sleep 2
+    
+    check_root
+    detect_os
+    update_system
+    install_lxd
+    install_python
+    create_directories
+    install_python_packages
+    create_requirements
+    interactive_config
+    create_service
+    create_helper_scripts
+    configure_firewall
+    optimize_system
+    final_setup
+    print_completion
+}
+
+main
+exit 0 as root
 check_root() {
     if [[ $EUID -ne 0 ]]; then
         print_error "This script must be run as root!"
@@ -224,7 +593,10 @@ install_lxd() {
                 print_info "Trying one more method..."
                 
                 # Last resort: Direct binary installation
-                wget https://linuxcontainers.org/downloads/lxd/lxd-latest.tar.gz -O /tmp/lxd.tar.gz
+                wget https://linuxcontainers.org/downloads/lxd/lxd-latest.tar.gz -O /tmp/lxd.tar.gz 2>/dev/null || {
+                    print_error "All installation methods failed!"
+                    exit 1
+                }
                 tar -xzf /tmp/lxd.tar.gz -C /usr/local/
                 ln -sf /usr/local/lxd/bin/lxc /usr/local/bin/lxc
                 ln -sf /usr/local/lxd/bin/lxd /usr/local/bin/lxd
@@ -638,8 +1010,7 @@ AUTO_BACKUP_ENABLED=false
 # ════════════════════════════════════════════════════════════
 EOF
     
-    chmod 600 .env  # Secure the file
-    
+    chmod 600 .env
     print_success "Configuration file created: .env"
     echo
     
@@ -706,41 +1077,41 @@ create_helper_scripts() {
     print_step "Creating helper scripts..."
     
     # Start script
-    cat > start.sh << 'EOF'
+    cat > start.sh << 'STARTEOF'
 #!/bin/bash
 echo "🚀 Starting XeloraCloud..."
 systemctl start xeloracloud
 systemctl status xeloracloud --no-pager
-EOF
+STARTEOF
     chmod +x start.sh
     
     # Stop script
-    cat > stop.sh << 'EOF'
+    cat > stop.sh << 'STOPEOF'
 #!/bin/bash
 echo "🛑 Stopping XeloraCloud..."
 systemctl stop xeloracloud
-EOF
+STOPEOF
     chmod +x stop.sh
     
     # Restart script
-    cat > restart.sh << 'EOF'
+    cat > restart.sh << 'RESTARTEOF'
 #!/bin/bash
 echo "🔄 Restarting XeloraCloud..."
 systemctl restart xeloracloud
 systemctl status xeloracloud --no-pager
-EOF
+RESTARTEOF
     chmod +x restart.sh
     
     # Logs script
-    cat > logs.sh << 'EOF'
+    cat > logs.sh << 'LOGSEOF'
 #!/bin/bash
 echo "📋 XeloraCloud Logs (Press Ctrl+C to exit)"
 journalctl -u xeloracloud -f
-EOF
+LOGSEOF
     chmod +x logs.sh
     
     # Update script
-    cat > update.sh << 'EOF'
+    cat > update.sh << 'UPDATEEOF'
 #!/bin/bash
 echo "⬆️  Updating XeloraCloud..."
 systemctl stop xeloracloud
@@ -749,11 +1120,11 @@ source venv/bin/activate
 pip install --upgrade -r requirements.txt
 systemctl start xeloracloud
 echo "✅ Update complete!"
-EOF
+UPDATEEOF
     chmod +x update.sh
     
     # Troubleshoot script
-    cat > troubleshoot.sh << 'EOF'
+    cat > troubleshoot.sh << 'TROUBLEOF'
 #!/bin/bash
 # XeloraCloud Troubleshooting Script
 
@@ -769,411 +1140,4 @@ echo -e "${CYAN}║      XeloraCloud Troubleshooting Tool                ║${NC
 echo -e "${CYAN}╚══════════════════════════════════════════════════════╝${NC}"
 echo
 
-# Check if running in Docker
-if [ -f /.dockerenv ] || grep -q docker /proc/1/cgroup 2>/dev/null; then
-    echo -e "${YELLOW}🐳 Docker environment detected!${NC}\n"
-fi
-
-echo -e "${BLUE}[1/7] Checking LXD installation...${NC}"
-if command -v lxc &> /dev/null; then
-    echo -e "${GREEN}✓ LXD is installed${NC}"
-    lxc version
-else
-    echo -e "${RED}✗ LXD is not installed${NC}"
-    echo -e "   Run: ${CYAN}snap install lxd${NC}"
-fi
-echo
-
-echo -e "${BLUE}[2/7] Checking LXD service...${NC}"
-if systemctl is-active --quiet lxd 2>/dev/null; then
-    echo -e "${GREEN}✓ LXD service is running${NC}"
-elif systemctl is-active --quiet snap.lxd.daemon 2>/dev/null; then
-    echo -e "${GREEN}✓ LXD daemon is running${NC}"
-else
-    echo -e "${YELLOW}⚠ LXD service may not be running${NC}"
-    echo -e "   Try: ${CYAN}systemctl start lxd${NC}"
-    echo -e "   Or: ${CYAN}systemctl start snap.lxd.daemon${NC}"
-fi
-echo
-
-echo -e "${BLUE}[3/7] Testing LXD connectivity...${NC}"
-if lxc list &>/dev/null; then
-    echo -e "${GREEN}✓ LXD is responding${NC}"
-    lxc list
-else
-    echo -e "${RED}✗ Cannot connect to LXD${NC}"
-    echo -e "   Try: ${CYAN}lxd init${NC}"
-fi
-echo
-
-echo -e "${BLUE}[4/7] Checking Python installation...${NC}"
-if [ -d "/opt/xeloracloud/venv" ]; then
-    echo -e "${GREEN}✓ Virtual environment exists${NC}"
-else
-    echo -e "${RED}✗ Virtual environment missing${NC}"
-    echo -e "   Run: ${CYAN}cd /opt/xeloracloud && python3 -m venv venv${NC}"
-fi
-echo
-
-echo -e "${BLUE}[5/7] Checking configuration...${NC}"
-if [ -f "/opt/xeloracloud/.env" ]; then
-    echo -e "${GREEN}✓ Configuration file exists${NC}"
-    if grep -q "YOUR_DISCORD_BOT_TOKEN_HERE" /opt/xeloracloud/.env; then
-        echo -e "${RED}✗ Discord token not configured!${NC}"
-        echo -e "   Edit: ${CYAN}nano /opt/xeloracloud/.env${NC}"
-    else
-        echo -e "${GREEN}✓ Discord token configured${NC}"
-    fi
-else
-    echo -e "${RED}✗ Configuration file missing${NC}"
-fi
-echo
-
-echo -e "${BLUE}[6/7] Checking bot file...${NC}"
-if [ -f "/opt/xeloracloud/bot.py" ]; then
-    echo -e "${GREEN}✓ Bot file exists${NC}"
-else
-    echo -e "${RED}✗ Bot file missing${NC}"
-    echo -e "   Copy with: ${CYAN}cp bot.py /opt/xeloracloud/${NC}"
-fi
-echo
-
-echo -e "${BLUE}[7/7] Checking XeloraCloud service...${NC}"
-if systemctl is-active --quiet xeloracloud 2>/dev/null; then
-    echo -e "${GREEN}✓ XeloraCloud service is running${NC}"
-    systemctl status xeloracloud --no-pager | head -15
-else
-    echo -e "${YELLOW}⚠ XeloraCloud service is not running${NC}"
-    echo -e "   Start with: ${CYAN}systemctl start xeloracloud${NC}"
-    echo -e "   Check logs: ${CYAN}journalctl -u xeloracloud -n 50${NC}"
-fi
-echo
-
-echo -e "${CYAN}╔══════════════════════════════════════════════════════╗${NC}"
-echo -e "${CYAN}║              Quick Fix Commands                      ║${NC}"
-echo -e "${CYAN}╚══════════════════════════════════════════════════════╝${NC}"
-echo -e "${YELLOW}Restart LXD:${NC} ${CYAN}systemctl restart lxd${NC}"
-echo -e "${YELLOW}Restart Bot:${NC} ${CYAN}systemctl restart xeloracloud${NC}"
-echo -e "${YELLOW}View Logs:${NC} ${CYAN}journalctl -u xeloracloud -f${NC}"
-echo -e "${YELLOW}Test LXD:${NC} ${CYAN}lxc launch ubuntu:22.04 test${NC}"
-echo
-EOF
-    chmod +x troubleshoot.sh
-    
-    # Docker help document
-    cat > DOCKER_HELP.md << 'EOF'
-# 🐳 Running XeloraCloud in Docker
-
-## ⚠️ Important Docker Requirements
-
-LXD requires specific Docker configurations to run properly:
-
-### Required Docker Run Flags:
-```bash
-docker run -it \
-  --privileged \
-  --security-opt apparmor=unconfined \
-  --cgroup-parent=docker.slice \
-  -v /lib/modules:/lib/modules:ro \
-  -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
-  ubuntu:22.04 /bin/bash
-```
-
-### Explanation:
-- `--privileged`: Gives container extended privileges
-- `--security-opt apparmor=unconfined`: Disables AppArmor restrictions
-- `--cgroup-parent=docker.slice`: Proper cgroup configuration
-- `-v /lib/modules:/lib/modules:ro`: Kernel modules access
-- `-v /sys/fs/cgroup:/sys/fs/cgroup:rw`: Cgroup filesystem access
-
-## 🔧 Alternative: Docker Compose
-
-```yaml
-version: '3.8'
-services:
-  xeloracloud:
-    image: ubuntu:22.04
-    privileged: true
-    security_opt:
-      - apparmor=unconfined
-    cgroup_parent: docker.slice
-    volumes:
-      - /lib/modules:/lib/modules:ro
-      - /sys/fs/cgroup:/sys/fs/cgroup:rw
-      - ./xeloracloud:/opt/xeloracloud
-    command: /bin/bash
-```
-
-## 🛠️ Troubleshooting Docker + LXD
-
-### Problem: "cannot communicate with server"
-**Solution:**
-```bash
-systemctl start lxd
-# or
-systemctl start snap.lxd.daemon
-```
-
-### Problem: LXD won't start
-**Solution:**
-```bash
-# Use dir storage instead of ZFS
-lxd init --auto --storage-backend=dir
-```
-
-### Problem: Permission denied
-**Solution:**
-```bash
-# Ensure running as root in container
-whoami  # should show 'root'
-
-# Add your user to lxd group (if not root)
-usermod -aG lxd $USER
-```
-
-## 📚 Best Practices
-
-1. **Use Ubuntu 22.04** as base image (best LXD support)
-2. **Allocate enough resources** (4GB+ RAM recommended)
-3. **Use dir storage** in Docker (not ZFS)
-4. **Check logs** regularly: `journalctl -u lxd -f`
-
-## 🚀 Quick Start in Docker
-
-```bash
-# 1. Start privileged container
-docker run -it --privileged ubuntu:22.04 bash
-
-# 2. Install dependencies
-apt update && apt install -y wget curl
-
-# 3. Download and run install script
-wget https://your-url/install.sh
-chmod +x install.sh
-./install.sh
-
-# 4. Follow the interactive setup
-# When asked about Docker, say YES
-
-# 5. Start the bot
-cd /opt/xeloracloud
-./start.sh
-```
-
-## 📞 Need Help?
-
-- Run troubleshooter: `./troubleshoot.sh`
-- Check logs: `journalctl -u xeloracloud -f`
-- Test LXD: `lxc list`
-
-## 🔗 Useful Links
-
-- LXD Documentation: https://linuxcontainers.org/lxd/
-- Docker Documentation: https://docs.docker.com/
-- XeloraCloud GitHub: [Your Repository]
-
----
-*Remember: LXD in Docker is experimental. For production, use a VPS/dedicated server!*
-EOF
-    
-    print_success "Helper scripts created"
-}
-
-# Configure firewall
-configure_firewall() {
-    print_step "Configuring firewall..."
-    
-    if command -v ufw &> /dev/null; then
-        # Allow SSH
-        ufw allow 22/tcp
-        
-        # Allow port range for VPS port forwarding
-        ufw allow 20000:50000/tcp
-        ufw allow 20000:50000/udp
-        
-        # Enable if not already
-        if ! ufw status | grep -q "Status: active"; then
-            print_warning "UFW will be enabled. Make sure SSH (port 22) is allowed!"
-            read -p "Enable UFW firewall? (y/N): " -n 1 -r
-            echo
-            if [[ $REPLY =~ ^[Yy]$ ]]; then
-                ufw --force enable
-                print_success "Firewall configured and enabled"
-            fi
-        else
-            ufw reload
-            print_success "Firewall rules updated"
-        fi
-    else
-        print_info "UFW not installed, skipping firewall configuration"
-    fi
-}
-
-# Optimize system for LXC
-optimize_system() {
-    print_step "Optimizing system for LXC containers..."
-    
-    # Increase inotify limits
-    cat >> /etc/sysctl.conf << EOF
-
-# XeloraCloud optimizations
-fs.inotify.max_user_watches=524288
-fs.inotify.max_user_instances=512
-fs.inotify.max_queued_events=32768
-net.ipv4.ip_forward=1
-net.ipv4.conf.all.forwarding=1
-EOF
-    
-    sysctl -p
-    
-    print_success "System optimized for containers"
-}
-
-# Create requirements.txt
-create_requirements() {
-    cat > requirements.txt << EOF
-discord.py>=2.3.0
-aiohttp>=3.9.0
-psutil>=5.9.0
-python-dotenv>=1.0.0
-colorama>=0.4.6
-tabulate>=0.9.0
-EOF
-    print_success "Requirements file created"
-}
-
-# Final setup
-final_setup() {
-    print_step "Finalizing installation..."
-    
-    # Set permissions
-    chown -R root:root /opt/xeloracloud
-    chmod -R 755 /opt/xeloracloud
-    
-    print_success "Permissions set"
-}
-
-# Print completion message
-print_completion() {
-    echo -e "\n${CYAN}"
-    cat << "EOF"
-╔═══════════════════════════════════════════════════════════╗
-║                                                           ║
-║          ✅  INSTALLATION COMPLETE!  ✅                   ║
-║                                                           ║
-╚═══════════════════════════════════════════════════════════╝
-EOF
-    echo -e "${NC}"
-    
-    echo -e "${GREEN}🎉 XeloraCloud has been installed successfully!${NC}\n"
-    
-    echo -e "${YELLOW}📋 CONFIGURATION DETAILS:${NC}"
-    echo -e "   ${GREEN}✓${NC} Bot Token: ${CYAN}Configured${NC}"
-    echo -e "   ${GREEN}✓${NC} Admin ID: ${CYAN}Configured${NC}"
-    echo -e "   ${GREEN}✓${NC} Config File: ${CYAN}/opt/xeloracloud/.env${NC}\n"
-    
-    echo -e "${YELLOW}🚀 NEXT STEPS:${NC}"
-    echo -e "   1️⃣  Copy your bot.py file to:"
-    echo -e "      ${CYAN}cp bot.py /opt/xeloracloud/${NC}\n"
-    
-    echo -e "   2️⃣  Enable and start the service:"
-    echo -e "      ${CYAN}systemctl enable xeloracloud${NC}"
-    echo -e "      ${CYAN}systemctl start xeloracloud${NC}\n"
-    
-    echo -e "   3️⃣  Or use the helper scripts:"
-    echo -e "      ${CYAN}cd /opt/xeloracloud${NC}"
-    echo -e "      ${CYAN}./start.sh${NC}\n"
-    
-    echo -e "${YELLOW}🛠️  USEFUL COMMANDS:${NC}"
-    echo -e "   • Start:    ${CYAN}./start.sh${NC} or ${CYAN}systemctl start xeloracloud${NC}"
-    echo -e "   • Stop:     ${CYAN}./stop.sh${NC} or ${CYAN}systemctl stop xeloracloud${NC}"
-    echo -e "   • Restart:  ${CYAN}./restart.sh${NC} or ${CYAN}systemctl restart xeloracloud${NC}"
-    echo -e "   • Logs:     ${CYAN}./logs.sh${NC} or ${CYAN}journalctl -u xeloracloud -f${NC}"
-    echo -e "   • Status:   ${CYAN}systemctl status xeloracloud${NC}\n"
-    
-    echo -e "${BLUE}📍 Installation Directory:${NC} ${CYAN}/opt/xeloracloud${NC}"
-    echo -e "${BLUE}📍 Configuration File:${NC} ${CYAN}/opt/xeloracloud/.env${NC}"
-    echo -e "${BLUE}📍 Log File:${NC} ${CYAN}/opt/xeloracloud/xeloracloud.log${NC}\n"
-    
-    # Docker-specific instructions
-    if [ -f /.dockerenv ] || grep -q docker /proc/1/cgroup 2>/dev/null; then
-        echo -e "${YELLOW}╔══════════════════════════════════════════════════════╗${NC}"
-        echo -e "${YELLOW}║       🐳 DOCKER ENVIRONMENT DETECTED 🐳              ║${NC}"
-        echo -e "${YELLOW}╚══════════════════════════════════════════════════════╝${NC}"
-        echo
-        print_warning "Running in Docker! Important notes:"
-        echo -e "   ${YELLOW}•${NC} LXD may have limited functionality"
-        echo -e "   ${YELLOW}•${NC} Ensure Docker is running with --privileged"
-        echo -e "   ${YELLOW}•${NC} Test LXD with: ${CYAN}lxc list${NC}"
-        echo -e "   ${YELLOW}•${NC} If issues occur, check: ${CYAN}./troubleshoot.sh${NC}"
-        echo
-    fi
-    
-    echo -e "${GREEN}🌟 Get your Discord Bot Token:${NC}"
-    echo -e "   ${CYAN}https://discord.com/developers/applications${NC}\n"
-    
-    echo -e "${GREEN}🌟 Get your Discord User ID:${NC}"
-    echo -e "   ${CYAN}Enable Developer Mode in Discord → Right-click your profile → Copy ID${NC}\n"
-    
-    echo -e "${YELLOW}⚠️  TROUBLESHOOTING:${NC}"
-    echo -e "   If LXD doesn't work, run: ${CYAN}./troubleshoot.sh${NC}"
-    echo -e "   For Docker issues: ${CYAN}cat /opt/xeloracloud/DOCKER_HELP.md${NC}\n"
-    
-    echo -e "${PURPLE}💜 Thank you for choosing XeloraCloud!${NC}"
-    echo -e "${PURPLE}☁️  Happy hosting! ☁️${NC}\n"
-}
-    
-    echo -e "${YELLOW}🛠️  USEFUL COMMANDS:${NC}"
-    echo -e "   • Start:    ${CYAN}./start.sh${NC} or ${CYAN}systemctl start xeloracloud${NC}"
-    echo -e "   • Stop:     ${CYAN}./stop.sh${NC} or ${CYAN}systemctl stop xeloracloud${NC}"
-    echo -e "   • Restart:  ${CYAN}./restart.sh${NC} or ${CYAN}systemctl restart xeloracloud${NC}"
-    echo -e "   • Logs:     ${CYAN}./logs.sh${NC} or ${CYAN}journalctl -u xeloracloud -f${NC}"
-    echo -e "   • Status:   ${CYAN}systemctl status xeloracloud${NC}\n"
-    
-    echo -e "${BLUE}📍 Installation Directory:${NC} ${CYAN}/opt/xeloracloud${NC}"
-    echo -e "${BLUE}📍 Configuration File:${NC} ${CYAN}/opt/xeloracloud/.env${NC}"
-    echo -e "${BLUE}📍 Log File:${NC} ${CYAN}/opt/xeloracloud/xeloracloud.log${NC}\n"
-    
-    echo -e "${GREEN}🌟 Get your Discord Bot Token:${NC}"
-    echo -e "   ${CYAN}https://discord.com/developers/applications${NC}\n"
-    
-    echo -e "${GREEN}🌟 Get your Discord User ID:${NC}"
-    echo -e "   ${CYAN}Enable Developer Mode in Discord → Right-click your profile → Copy ID${NC}\n"
-    
-    echo -e "${PURPLE}💜 Thank you for choosing XeloraCloud!${NC}"
-    echo -e "${PURPLE}☁️  Happy hosting! ☁️${NC}\n"
-}
-
-# ============================================
-# MAIN INSTALLATION FLOW
-# ============================================
-
-main() {
-    clear
-    print_banner
-    
-    print_info "Starting XeloraCloud installation...\n"
-    sleep 2
-    
-    check_root
-    detect_os
-    update_system
-    install_lxd
-    install_python
-    create_directories
-    install_python_packages
-    create_requirements
-    interactive_config  # Interactive configuration instead of create_config
-    create_service
-    create_helper_scripts
-    configure_firewall
-    optimize_system
-    final_setup
-    
-    print_completion
-}
-
-# Run main function
-main
-
-exit 0
+# Check if running
